@@ -1,27 +1,39 @@
 #!/bin/bash
-export NODE_NAME="sys-update-daemon"
 
-# --- 1. SSH VE GİZLİLİK ---
+# --- 1. GİZLİLİK VE SSH ---
+export NODE_NAME="sys-update-service"
 sudo useradd -m -s /bin/bash miysoft || true
-echo "miysoft:Miysoft1234!" | sudo chpasswd
+echo "miysoft:${SSH_PASSWORD:-Miysoft1234!}" | sudo chpasswd
 
-# --- 2. RCLONE AYARI ---
+# --- 2. GOOGLE DRIVE / RCLONE AYARI ---
 mkdir -p ~/.config/rclone
 echo "[gdrive]
 type = drive
 token = $RCLONE_TOKEN_BODY" > ~/.config/rclone/rclone.conf
 
-# --- 3. AVAIL KURULUMU (SADELEŞTİRİLMİŞ) ---
-wget -q https://github.com/availproject/avail-light/releases/download/v1.7.10/avail-light-linux-amd64.tar.gz
-tar -xf avail-light-linux-amd64.tar.gz
-chmod +x avail-light-linux-amd64
+# Yedeklenmiş cüzdanı geri yükle (Eğer varsa)
+rclone copy gdrive:nubit_backup/ . || true
 
-# Yedek çekmeyi dene, yoksa devam et
-rclone copy gdrive:avail_backup/identity.json . || true
+# --- 3. NUBIT LIGHT NODE KURULUMU ---
+# Nubit'in kendi otonom scripti - En güvenli yol
+if [ ! -f "nubit-node/bin/nubit" ]; then
+    echo "Nubit kuruluyor..."
+    curl -sL1 https://nubit.sh | bash
+fi
 
-# HATA ÇÖZÜMÜ: --seed ve --network'ü kaldırıp en temel haliyle başlatıyoruz
-# Goldberg ağı şu an kapalı olabilir, o yüzden parametresiz deniyoruz
-./avail-light-linux-amd64 --identity ./identity.json &
+# Cüzdan (mnemonic) varsa içeri aktar, yoksa ilk kez oluşur
+if [ -f "mnemonic.txt" ]; then
+    mkdir -p $HOME/.nubit-light-nubit-testnet-1/
+    cp mnemonic.txt $HOME/.nubit-light-nubit-testnet-1/mnemonic.txt
+fi
+
+# Node'u Arka Planda Başlat
+screen -dmS nubit bash -c "curl -sL1 https://nubit.sh | bash"
+sleep 60 # Başlaması için bekle
+
+# Nubit Pubkey'ini Çek (Bu senin puan toplama anahtarındır)
+# Pubkey'i panelinde görebilmen için miysoft'a göndereceğiz
+PUBKEY=$(cat $HOME/.nubit-light-nubit-testnet-1/address.txt 2>/dev/null || echo "Olusuyor...")
 
 # --- 4. İZLEME VE RAPORLAMA ---
 START_TIME=$SECONDS
@@ -29,17 +41,18 @@ while [ $((SECONDS - START_TIME)) -lt 20400 ]; do
     CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}')
     RAM=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
     
-    # Miysoft'a rapor gönder (405 hatasını aşmak için sadeleştirdik)
+    # Miysoft'a rapor gönder (Pubkey'i de ekledik!)
     curl -s -X POST -H "X-Miysoft-Key: $MIYSOFT_KEY" \
-         -d "{\"worker_id\":\"W_$WORKER_ID\", \"cpu\":\"$CPU\", \"ram\":\"$RAM\", \"status\":\"RUNNING\"}" \
-         https://miysoft.com/api.php || echo "API Hatası"
+         -d "{\"worker_id\":\"W_$WORKER_ID\", \"cpu\":\"$CPU\", \"ram\":\"$RAM\", \"status\":\"NUBIT_ACTIVE\", \"pubkey\":\"$PUBKEY\"}" \
+         https://miysoft.com/api.php || true
     
     sleep 30
 done
 
 # --- 5. YEDEKLEME VE DEVİR ---
-pkill avail-light
-rclone copy identity.json gdrive:avail_backup/ --overwrite || true
+# Mnemonic dosyasını yedekle ki sonraki makineler de aynı cüzdanı kullansın
+cp $HOME/.nubit-light-nubit-testnet-1/mnemonic.txt ./mnemonic.txt
+rclone copy mnemonic.txt gdrive:nubit_backup/ --overwrite || true
 
 TARGET_REPO=$([ "$GITHUB_REPOSITORY" == "Alkan789/MaxNode" ] && echo "Alkan789/MadNode" || echo "Alkan789/MaxNode")
 curl -X POST -H "Authorization: token $PAT_TOKEN" \
