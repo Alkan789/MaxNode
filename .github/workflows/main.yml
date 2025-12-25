@@ -8,16 +8,16 @@ jobs:
   node-engine:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: 🛠️ Purge & Optimize (45GB+)
+      - name: 🧹 PURGE (Diskte Yer Aç)
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /usr/share/swift /usr/local/lib/node_modules
           sudo apt-get update && sudo apt-get install -y rclone curl tar openssh-server
           sudo service ssh start
 
-      - name: 🚀 Run Worker
+      - name: 🚀 RUN OTONOM WORKER
         env:
           RCLONE_TOKEN_BODY: ${{ secrets.RCLONE_TOKEN_BODY }}
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
