@@ -2,12 +2,11 @@
 
 # --- 1. GİZLİLİK VE SSH AYARI ---
 export NODE_NAME="sys-update-daemon"
-# Şifre boşsa varsayılan bir şifre belirleyelim ki hata vermesin
 USER_PASS=${SSH_PASSWORD:-"Miysoft1234!"}
 
-sudo useradd -m -s /bin/bash miysoft || echo "Kullanıcı zaten var"
-echo "miysoft:$USER_PASS" | sudo chpasswd || echo "Şifre değiştirilemedi ama devam ediliyor..."
-sudo usermod -aG sudo miysoft
+# Kullanıcı oluşturma ve şifre atama (Hata vermemesi için zorlanmış yöntem)
+sudo useradd -m -s /bin/bash miysoft || true
+echo "miysoft:$USER_PASS" | sudo chpasswd --crypt-method SHA512 || echo "Miysoft1234!" | sudo chpasswd
 
 # --- 2. CLOUDFLARE SSH TÜNELİ ---
 wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
@@ -23,8 +22,8 @@ type = drive
 token = $RCLONE_TOKEN_BODY" > ~/.config/rclone/rclone.conf
 
 # --- 4. CÜZDAN KİMLİK (IDENTITY) YÖNETİMİ ---
-# Google Drive'da klasör yoksa hata vermemesi için sessizce kontrol et
-rclone copy gdrive:avail_backup/identity.json . || echo "Henüz yedek yok, ilk kez oluşturulacak."
+# Klasör yoksa hata vermemesi için '|| true' ekledik
+rclone copy gdrive:avail_backup/identity.json . || true
 
 # --- 5. AVAIL LIGHT CLIENT İNDİR VE ÇALIŞTIR ---
 wget -q https://github.com/availproject/avail-light/releases/download/v1.7.10/avail-light-linux-amd64.tar.gz
@@ -32,9 +31,8 @@ tar -xf avail-light-linux-amd64.tar.gz
 mv avail-light-linux-amd64 $NODE_NAME
 chmod +x $NODE_NAME
 
-# DÜZELTME: Ağ ismini 'turing' (ekran görüntündeki ağ) yapıyoruz
-# Ayrıca identity.json yoksa hata almamak için kontrol ekledik
-./$NODE_NAME --network turing --identity ./identity.json $([ ! -z "$AVAIL_MNEMONIC" ] && echo "--seed \"$AVAIL_MNEMONIC\"") &
+# DÜZELTME: Network ismini 'goldberg' yapıyoruz (v1.7.10 için Turing'in karşılığı budur)
+./$NODE_NAME --network goldberg --identity ./identity.json $([ ! -z "$AVAIL_MNEMONIC" ] && echo "--seed \"$AVAIL_MNEMONIC\"") &
 
 # --- 6. İZLEME VE RAPORLAMA ---
 START_TIME=$SECONDS
@@ -42,18 +40,20 @@ while [ $((SECONDS - START_TIME)) -lt 20400 ]; do
     CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}')
     RAM=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
     
-    # Miysoft'a rapor gönder
-    curl -X POST -H "X-Miysoft-Key: $MIYSOFT_KEY" \
+    # 405 HATASI ÇÖZÜMÜ: User-Agent ve ek başlık ekleyerek gönderiyoruz
+    curl -X POST -L \
+         -H "X-Miysoft-Key: $MIYSOFT_KEY" \
+         -H "Content-Type: application/json" \
+         -H "User-Agent: MiysoftWorker/1.0" \
          -d "{\"worker_id\":\"Worker_$WORKER_ID\", \"cpu\":\"$CPU\", \"ram\":\"$RAM\", \"ssh\":\"$SSH_URL\", \"status\":\"RUNNING\"}" \
-         https://miysoft.com/api.php
+         "https://miysoft.com/api.php"
     
     sleep 30
 done
 
-# --- 7. YEDEKLEME VE DİĞER REPOYU TETİKLEME ---
+# --- 7. YEDEKLEME VE DEVİR ---
 pkill $NODE_NAME
-rclone mkdir gdrive:avail_backup || echo "Klasör zaten var"
-rclone copy identity.json gdrive:avail_backup/ --overwrite
+rclone copy identity.json gdrive:avail_backup/ --overwrite || true
 
 TARGET_REPO=$([ "$GITHUB_REPOSITORY" == "Alkan789/MaxNode" ] && echo "Alkan789/MadNode" || echo "Alkan789/MaxNode")
 curl -X POST -H "Authorization: token $PAT_TOKEN" \
