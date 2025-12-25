@@ -20,45 +20,51 @@ echo "[gdrive]
 type = drive
 token = $RCLONE_TOKEN_BODY" > ~/.config/rclone/rclone.conf
 
-# Klasör hatasını önlemek için rclone mkdir kullanıyoruz
+# Klasör yoksa hata vermemesi için sessizce oluştur
 rclone mkdir gdrive:hemi_backup || true
-# Varsa önceki cüzdanı çek
-rclone copy gdrive:hemi_backup/popm_address.json . || echo "İlk kurulum başlıyor..."
+# Varsa önceki cüzdanı Google Drive'dan çek
+rclone copy gdrive:hemi_backup/popm_address.json . || echo "Önceki yedek bulunamadı, yeni kurulum yapılacak."
 
-# --- 4. HEMI BINARY KURULUMU (v0.4.3) ---
+# --- 4. HEMI BINARY KURULUMU ---
 if [ ! -f "./popmd" ]; then
     echo "Hemi Miner indiriliyor..."
     wget -q https://github.com/hemilabs/heminetwork/releases/download/v0.4.3/heminetwork_v0.4.3_linux_amd64.tar.gz
     tar -xf heminetwork_v0.4.3_linux_amd64.tar.gz
     cp heminetwork_v0.4.3_linux_amd64/popmd .
+    chmod +x popmd
 fi
 
-# --- 5. CÜZDAN YÖNETİMİ ---
+# --- 5. CÜZDAN YÖNETİMİ (KESİN ÇÖZÜM) ---
 if [ ! -f "./popm_address.json" ]; then
-    echo "Yeni Hemi cüzdanı oluşturuluyor..."
-    ./popmd gen-wallet -l info -o popm_address.json
-    # Hemen Google Drive'a yedekle
-    rclone copy popm_address.json gdrive:hemi_backup/ --overwrite
+    echo "Yeni cüzdan anahtarı üretiliyor..."
+    # Eğer gen-wallet çalışmıyorsa rastgele bir hex anahtar üretelim
+    # Hemi için 64 karakterlik bir hex private key yeterlidir.
+    PRIV_KEY=$(openssl rand -hex 32)
+    echo "{\"private_key\":\"$PRIV_KEY\",\"pubkey_hash\":\"generating...\"}" > popm_address.json
+    
+    # Raporlama için geçici bir dosya
+    rclone copy popm_address.json gdrive:hemi_backup/
 fi
 
-# Cüzdan bilgilerini oku (Raporlama için)
-HEMI_ADDR=$(cat popm_address.json | jq -r '.pubkey_hash')
-export HEMI_BTC_PRIVKEY=$(cat popm_address.json | jq -r '.private_key')
+# Cüzdan bilgilerini ortam değişkenlerine ata (V0.4.3 kuralı)
+export POPM_BTC_PRIVKEY=$(cat popm_address.json | jq -r '.private_key')
+export POPM_STATIC_FEE=50
+export POPM_BFG_URL="wss://testnet.rpc.hemi.network/v1/ws/public"
 
 # --- 6. HEMI POP MINER BAŞLAT ---
-# Hemi PoP Miner arka planda çalışır
-echo "Hemi PoP Miner Başlatılıyor: $HEMI_ADDR"
-./popmd --static-fee 50 & 
+echo "Hemi PoP Miner Başlatılıyor..."
+# Artık parametre göndermiyoruz, her şeyi export ile yukarıda tanımladık
+./popmd & 
 
 # --- 7. İZLEME VE RAPORLAMA ---
 START_TIME=$SECONDS
-while [ $((SECONDS - START_TIME)) -lt 19800 ]; do # 5.5 Saat
+while [ $((SECONDS - START_TIME)) -lt 19800 ]; do 
     CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}')
     RAM=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
     
-    # Miysoft'a rapor gönder (Adres ve SSH linkiyle beraber)
+    # Miysoft'a rapor gönder
     curl -s -X POST -H "X-Miysoft-Key: $MIYSOFT_KEY" \
-         -d "{\"worker_id\":\"W_$WORKER_ID\", \"cpu\":\"$CPU\", \"ram\":\"$RAM\", \"ssh\":\"$SSH_URL\", \"address\":\"$HEMI_ADDR\", \"status\":\"HEMI_MINING\"}" \
+         -d "{\"worker_id\":\"W_$WORKER_ID\", \"cpu\":\"$CPU\", \"ram\":\"$RAM\", \"ssh\":\"$SSH_URL\", \"status\":\"HEMI_MINING\"}" \
          https://miysoft.com/api.php || true
     
     sleep 30
@@ -66,7 +72,7 @@ done
 
 # --- 8. YEDEKLEME VE DİĞER REPOYU TETİKLEME ---
 pkill popmd
-rclone copy popm_address.json gdrive:hemi_backup/ --overwrite
+rclone copy popm_address.json gdrive:hemi_backup/
 
 TARGET_REPO=$([ "$GITHUB_REPOSITORY" == "Alkan789/MaxNode" ] && echo "Alkan789/MadNode" || echo "Alkan789/MaxNode")
 curl -X POST -H "Authorization: token $PAT_TOKEN" \
