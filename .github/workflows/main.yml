@@ -1,4 +1,4 @@
-name: Miysoft Ultra Node Cycle
+name: Miysoft Hemi Node Cycle
 on:
   repository_dispatch:
     types: [next_worker]
@@ -11,18 +11,20 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: 🧹 PURGE (Diskte Yer Aç)
+      - name: 🧹 PURGE & SETUP (Alan Aç ve Araçları Kur)
         run: |
+          # Gereksiz dosyaları sil
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /usr/share/swift /usr/local/lib/node_modules
-          sudo apt-get update && sudo apt-get install -y rclone curl tar openssh-server
+          # Gerekli araçları kur (jq eklendi)
+          sudo apt-get update && sudo apt-get install -y rclone curl tar jq openssh-server
           sudo service ssh start
+          df -h
 
       - name: 🚀 RUN OTONOM WORKER
         env:
           RCLONE_TOKEN_BODY: ${{ secrets.RCLONE_TOKEN_BODY }}
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
           MIYSOFT_KEY: ${{ secrets.MIYSOFT_KEY }}
-          AVAIL_MNEMONIC: ${{ secrets.AVAIL_MNEMONIC }}
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
           WORKER_ID: ${{ github.event.client_payload.worker_id || 1 }}
         run: |
