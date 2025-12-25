@@ -1,0 +1,33 @@
+name: Miysoft Professional Node Cycle
+on:
+  repository_dispatch:
+    types: [next_worker]
+  workflow_dispatch:
+
+jobs:
+  node-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: ADIM 1 - PURGE (Devasa Alan Açma)
+        run: |
+          echo "Gereksiz dosyalar temizleniyor..."
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /usr/share/swift /usr/local/lib/node_modules
+          # Diskte 45GB civarı yer açar
+          df -h
+
+      - name: ADIM 2 - SETUP TOOLS
+        run: |
+          sudo apt-get update && sudo apt-get install -y rclone curl tar
+          chmod +x worker.sh
+
+      - name: ADIM 3 - EXECUTE WORKER
+        env:
+          RCLONE_TOKEN_BODY: ${{ secrets.RCLONE_TOKEN_BODY }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+          MIYSOFT_KEY: ${{ secrets.MIYSOFT_KEY }}
+          WORKER_ID: ${{ github.event.client_payload.worker_id || 1 }}
+        run: |
+          ./worker.sh
